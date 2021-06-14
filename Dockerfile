@@ -1,9 +1,18 @@
 FROM ubuntu:18.04
 MAINTAINER aaronfand <aaron.fand@gmail.com>
 
-# Add R list
-RUN echo 'deb http://cran.rstudio.com/bin/linux/ubuntu trusty/' | sudo tee -a /etc/apt/sources.list.d/r.list && \
-    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys E084DAB9
+# fork from https://github.com/tobilg/docker-livy
+
+# Overall ENV vars
+ENV SPARK_VERSION 3.0.2
+ENV SPARK_VERSION_STRING spark-$SPARK_VERSION-bin-hadoop2.7
+ENV LIVY_BUILD_VERSION livy-server-0.3.0-SNAPSHOT
+ENV DEBIAN_FRONTEND noninteractive
+
+# Set paths
+ENV LIVY_APP_PATH /apps/livy
+ENV SPARK_HOME /usr/local/spark
+#ENV MESOS_NATIVE_JAVA_LIBRARY /usr/local/lib/libmesos.so
 
 # packages
 RUN apt-get update && apt-get install -yq --no-install-recommends --force-yes \
@@ -16,60 +25,61 @@ RUN apt-get update && apt-get install -yq --no-install-recommends --force-yes \
     libcurl3 \
     libsasl2-modules && \
     rm -rf /var/lib/apt/lists/*
+    
 
-# Overall ENV vars
-ENV SPARK_VERSION 3.0.0
-ENV MESOS_BUILD_VERSION 0.28.0-2.0.16
-ENV LIVY_BUILD_VERSION livy-server-0.3.0-SNAPSHOT
+# R List Install
+RUN apt update -qq
+RUN apt install --no-install-recommends --yes software-properties-common dirmngr gpg-agent
+RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-keys E298A3A825C0D65DFD57CBB651716619E084DAB9
+RUN add-apt-repository "deb https://cloud.r-project.org/bin/linux/ubuntu $(lsb_release -cs)-cran40/"
+RUN apt install --no-install-recommends --yes r-base
 
-# Set install path for Livy
-ENV LIVY_APP_PATH /apps/livy
-
-# Set build path for Livy
-ENV LIVY_BUILD_PATH /apps/build/livy
-
-# Set Hadoop config directory
-ENV HADOOP_CONF_DIR /etc/hadoop/conf
-
-# Set Spark home directory
-ENV SPARK_HOME /usr/local/spark
-
-# Set native Mesos library path
-ENV MESOS_NATIVE_JAVA_LIBRARY /usr/local/lib/libmesos.so
 
 # Mesos install
-RUN wget http://repos.mesosphere.com/ubuntu/pool/main/m/mesos/mesos_$MESOS_BUILD_VERSION.ubuntu1404_amd64.deb && \
-    dpkg -i mesos_$MESOS_BUILD_VERSION.ubuntu1404_amd64.deb && \
-    rm mesos_$MESOS_BUILD_VERSION.ubuntu1404_amd64.deb
+RUN apt-get install -yq --no-install-recommends --force-yes \
+	build-essential \
+	python-dev \
+	python-six \
+	python-virtualenv \
+	libcurl4-nss-dev \
+	libsasl2-dev \
+	libsasl2-modules \
+	libapr1-dev \
+	zlib1g-dev \
+	iputils-ping
+RUN wget https://downloads.apache.org/mesos/1.11.0/mesos-1.11.0.tar.gz  && \
+	tar -zxf mesos-1.11.0.tar.gz && \
+    mv mesos-1.11.0/ /usr/local/mesos  && \
+    rm -rf mesos-1.11.0 && \
+    rm  mesos-1.11.0.tar.gz
 
-# Spark ENV vars
-ENV SPARK_VERSION_STRING spark-$SPARK_VERSION-bin-hadoop2.6
-ENV SPARK_DOWNLOAD_URL http://d3kbcqa49mib13.cloudfront.net/$SPARK_VERSION_STRING.tgz
+# Spark Install
+RUN wget https://downloads.apache.org/spark/spark-3.0.2/spark-3.0.2-bin-hadoop2.7.tgz && \
+    mkdir -p /usr/local/spark && \
+    tar xvf spark-3.0.2-bin-hadoop2.7.tgz && \
+    mv spark-3.0.2-bin-hadoop2.7/* /usr/local/spark/  && \
+    rm -rf spark-3.0.2-bin-hadoop2.7 && \
+    rm spark-3.0.2-bin-hadoop2.7.tgz
 
-# Download and unzip Spark
-RUN wget $SPARK_DOWNLOAD_URL && \
-    mkdir -p $SPARK_HOME && \
-    tar xvf $SPARK_VERSION_STRING.tgz -C /tmp && \
-    cp -rf /tmp/$SPARK_VERSION_STRING/* $SPARK_HOME && \
-    rm -rf -- /tmp/$SPARK_VERSION_STRING && \
-    rm spark-$SPARK_VERSION-bin-hadoop2.6.tgz
 
-# Clone Livy repository
-RUN mkdir -p /apps/build && \
-    cd /apps/build && \
-	git clone https://github.com/apache/incubator-livy && \
-	cd $LIVY_BUILD_PATH && \
-    mvn -DskipTests -Dspark.version=$SPARK_VERSION clean package && \
-    unzip $LIVY_BUILD_PATH/assembly/target/$LIVY_BUILD_VERSION.zip -d /apps && \
-    rm -rf $LIVY_BUILD_PATH && \
-	mkdir -p $LIVY_APP_PATH/upload
+# Livy Install
+RUN wget https://apache.osuosl.org/incubator/livy/0.7.1-incubating/apache-livy-0.7.1-incubating-bin.zip  && \
+    mkdir -p /apps/livy && \
+    mkdir -p /apps/livy/logs && \
+    mkdir -p /apps/livy/upload && \
+    unzip apache-livy-0.7.1-incubating-bin.zip  && \
+    mv apache-livy-0.7.1-incubating-bin/* /apps/livy/  && \
+    rm -rf apache-livy-0.7.1-incubating-bin && \
+    rm apache-livy-0.7.1-incubating-bin.zip
+
 	
 # Add custom files, set permissions
 ADD entrypoint.sh .
-
 RUN chmod +x entrypoint.sh
+
+ADD livy.conf /apps/livy/conf
 
 # Expose port
 EXPOSE 8998
 
-# ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
